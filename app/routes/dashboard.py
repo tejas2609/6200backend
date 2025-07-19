@@ -3,6 +3,7 @@ from app.models import DashboardCreate, DashboardInDB
 from datetime import datetime
 from firebase_admin import firestore
 from google.cloud.exceptions import GoogleCloudError
+import uuid
 
 router = APIRouter()
 db = firestore.client()
@@ -16,7 +17,7 @@ async def get_dashboards():
         dashboards = []
         for doc in docs:
             data = doc.to_dict()
-            data["_id"] = doc.id
+            data["id"] = doc.id
             dashboards.append(DashboardInDB(**data))
 
         return dashboards
@@ -35,21 +36,29 @@ async def create_dashboard(dashboard: DashboardCreate):
         doc_data = dashboard.dict()
         doc_data["created_at"] = now
         doc_data["updated_at"] = now
-
         dashboards_ref = db.collection("dashboards")
+        
+        graphs = doc_data['graphs']
+        for i in range(0, len(graphs)):
+            if 'id' not in graphs[i] or not graphs[i]['id']:
+                graphs[i]['id'] = str(uuid.uuid4())
+        doc_data["graphs"] = graphs
 
-        # Check for duplicate name (Firestore doesn't enforce uniqueness)
-        query = dashboards_ref.where("name", "==", dashboard.name).stream()
-        if any(True for _ in query):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Dashboard with name '{dashboard.name}' already exists."
-            )
+        if doc_data["id"]:
+            query = dashboards_ref.document(doc_data["id"])
+            if query.get().exists:
+                query.update(doc_data)
+                dashboard_in_db = DashboardInDB(**doc_data)
+                
+                return {
+                    "resp_status": "success",
+                    "dashboard": dashboard_in_db
+                }
 
         doc_ref = dashboards_ref.document()
         doc_ref.set(doc_data)
 
-        doc_data["_id"] = doc_ref.id
+        doc_data["id"] = doc_ref.id
         dashboard_in_db = DashboardInDB(**doc_data)
 
         return {

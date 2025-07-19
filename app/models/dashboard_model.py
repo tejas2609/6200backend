@@ -5,6 +5,8 @@ from datetime import datetime
 class DashboardBase(BaseModel):
     name: str
     noofdb: int
+    patientfile: str
+    id: Optional[str]
     graphs: Optional[list] 
     email: Optional[str]
 
@@ -12,7 +14,7 @@ class DashboardCreate(DashboardBase):
     pass
 
 class DashboardInDB(DashboardBase):
-    id: Optional[str] = Field(alias="_id")
+    id: Optional[str] = Field(alias="id")
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 
