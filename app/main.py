@@ -1,3 +1,5 @@
+import threading
+import time
 from app import firebase  # triggers Firebase initialization
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +10,8 @@ from datetime import datetime
 import os
 import shutil
 from apscheduler.schedulers.background import BackgroundScheduler
+
+from app.services.livedata import flush_to_firestore, generate_data
 
 
 app = FastAPI()
@@ -28,8 +32,6 @@ scheduler = BackgroundScheduler()
 
 # Define your scheduled job (e.g., delete a folder or log hello)
 def scheduled_job():
-    print(f"[{datetime.now()}] Hello from APScheduler")
-
     folder_path = os.getenv('DOWNLOAD_FOLDER',"D:/UoS/COMP6200/firebase/app/tmp")
     if os.path.exists(folder_path):
         try:
@@ -39,6 +41,14 @@ def scheduled_job():
             print(f"Error deleting folder: {e}")
     else:
         print(f"Folder does not exist: {folder_path}")
+
+@app.on_event("startup")
+def start_live_data():
+    x = 0
+    # threading.Thread(target=generate_data, daemon=True).start()
+    # threading.Thread(target=flush_to_firestore, daemon=True).start()
+    # while True:
+    #     time.sleep(60)
 
 @app.on_event("startup")
 def start_scheduler():

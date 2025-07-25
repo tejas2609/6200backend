@@ -133,9 +133,8 @@ async def login(req: LoginRequest):
         if user["password"] != hash_password(req.password):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        if req.user_role == 'admin':
-            if user["hospital"] != req.hospital:
-                raise HTTPException(status_code=401, detail="You aren't administrator of ${req.hospital}")
+        if user["hospital"] != req.hospital:
+            raise HTTPException(status_code=401, detail="You aren't registered for ${req.hospital}")
 
         token_data = {"sub": req.email, "role": req.user_role}
         if 'hospital' in user:

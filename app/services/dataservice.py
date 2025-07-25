@@ -7,28 +7,17 @@ from firebase_admin import firestore, storage
 import os
 from scipy.integrate import cumulative_trapezoid
 from scipy.signal import butter, filtfilt
+import gcsfs
+import zarr
 
 db = firestore.client()
 bucket = storage.bucket()
 
-OFFSET = 3
-# Load the .mat file
+OFFSET = 0.0005
+key_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../firebase-key.json"))
+fs = gcsfs.GCSFileSystem(project='project-8680797989633263399', token=key_path)
 
-def downloadFile(filename: str):
-    tmp_dir = os.getenv("DOWNLOAD_FOLDER", "D:/UoS/COMP6200/firebase/app/tmp")
-    os.makedirs(tmp_dir, exist_ok=True) 
-    local_filename = os.path.join(tmp_dir, filename)
-    print(local_filename, os.path.isfile(local_filename))
-    
-    if not os.path.isfile(local_filename) or os.path.getsize(local_filename) == 0: 
-        blob = bucket.blob(filename)
-        blob.download_to_filename(local_filename)
-        if os.path.isfile(local_filename) and os.path.getsize(local_filename) > 0:
-            return {'status': 'success', 'file_path': local_filename}
-        else:
-            return {'status': 'failure', 'file_path': local_filename}
-    else:
-        return {'status': 'success', 'file_path': local_filename}
+BASE_PATH = 'project-8680797989633263399.firebasestorage.app/'
 
 
 def get_file_details(doc_id: str):
@@ -45,87 +34,65 @@ def get_file_details(doc_id: str):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
-        
 
-# Function to extract and smooth physiological data (e.g., Bp)
-def extract_structure_safe(colname: str, sdata) -> pd.DataFrame:   
-    bp_data = sdata[colname][0, 0][0, 0].flatten()
+def extract_structure_safe1(root, colname: str, filename, duration):
+    time = get_time1(filename, duration)
+    bp_data = root[colname][50000 - len(time): 50000]
     bp_data = bp_data[np.isfinite(bp_data)]
-
     if len(bp_data) >= 0:
         smoothed = savgol_filter(bp_data, window_length=201, polyorder=5)
     else:
         smoothed = bp_data
-
     return smoothed.tolist()
 
-# Function to get time values
-def get_time(filename) -> pd.DataFrame:
-    mat = loadmat(filename)
-    sdata = mat["SData"]
-    time_data = sdata['Time'][0, 0].flatten()
+def get_time1(filename, duration):
+    zarr_path = BASE_PATH + filename + '/SData'
+    mapper = fs.get_mapper(zarr_path)
+    root = zarr.open_group(store=mapper, mode='r')
+
+    time_data = root['Time'][:]
+    final_duration = int(time_data[-1] - time_data[0])
+    if duration and duration != 'undefined':
+        final_duration = int(final_duration) if final_duration < float(duration) else int(duration)
+    else:
+        if final_duration > 10:
+            final_duration = 10
+    start_time = time_data[-1] - final_duration
+    start_idx = np.searchsorted(time_data, start_time, side="left")
+    time_data = time_data[start_idx:]
     time_data = time_data[np.isfinite(time_data)]
     return time_data.tolist()
 
-# === Example usage ===
-def extract_columns(fileid, colname: str):
-    filename = get_file_details(fileid)
-    if filename:
-        downloadstatus = downloadFile(filename)
-        if downloadstatus['status'] == 'success':    
-            mat = loadmat(downloadstatus['file_path'])
-            sdata = mat["SData"]        
-            if colname == 'RawVelocity':
-                data =  getRawVelocity(sdata)
-                return data, downloadstatus['file_path']
-            else:
-                bp_df = extract_structure_safe(colname, sdata)
-                return bp_df, downloadstatus['file_path']
 
-def bandpass(data, lowcut=0.5, highcut=50, fs=500, order=4):
+def extract_columns1(filename, colname: str, duration):
+    if filename:
+        zarr_path = BASE_PATH + filename + '/SData'
+        mapper = fs.get_mapper(zarr_path)
+        root = zarr.open_group(store=mapper, mode='r')
+        if colname != 'RawVelocity':
+            data = extract_structure_safe1(root, colname, filename, duration)
+            return data
+        else:
+            data = getRawVelocity1(root, filename, duration)
+            return data
+
+def bandpass(data, lowcut=0.5, highcut=10, fs=500, order=4):
+    data = np.asarray(data).flatten()
     nyquist = 0.5 * fs
     low = lowcut / nyquist
     high = highcut / nyquist
     b, a = butter(order, [low, high], btype='band')
     return filtfilt(b, a, data)
 
-def getRawVelocity(sData):
-    sdata = sData[0, 0]
-    raw_velocity_matrix = sdata["RawVelocity"][0]   # final (50000, 30) array
-    result = []
+def getRawVelocity1(root, filename, duration):
+    raw_velocity_matrix = root["RawVelocity"][:]
+    result = []    
+    time = get_time1(filename, duration)
     
-    time = sdata['Time'].flatten()[0: 15000]
     for i in range(30):
-        l = raw_velocity_matrix[0][:, i].tolist()[0: 15000]
+        l = raw_velocity_matrix[:, i].tolist()[50000 - len(time): 50000]
         displacement = cumulative_trapezoid(l, time, initial=0).tolist()
         filtered_displacement = bandpass(displacement) 
-        # centered_displacement = filtered_displacement - np.min(filtered_displacement)
-        # waterfall_displacement = centered_displacement + i * OFFSET
-        # result.append(waterfall_displacement.tolist())
+        filtered_displacement = np.array(filtered_displacement) + i * OFFSET
         result.append(filtered_displacement.tolist())
     return result
-
-
-def extract_col_names(filename, prefix=""):
-
-    mat = loadmat(filename)
-    sdata = mat["SData"]
-    obj = sdata[0]
-    structure = {}
-    
-    if hasattr(obj, 'dtype') and obj.dtype.names:  # MATLAB struct
-        for name in obj.dtype.names:
-            try:
-                val = obj[name]
-                while isinstance(val, np.ndarray) and val.size == 1:
-                    val = val[0]
-                full_name = f"{prefix}.{name}" if prefix else name
-                if hasattr(val, 'dtype') and val.dtype.names:
-                    structure.update(extract_structure_safe(val, sdata, prefix=full_name))
-                else:
-                    structure[full_name] = val.shape if hasattr(val, 'shape') else type(val)
-            except Exception as e:
-                structure[full_name] = f"Error: {e}"
-    else:
-        structure[prefix] = obj.shape if hasattr(obj, 'shape') else type(obj)
-    return structure
