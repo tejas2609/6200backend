@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.utils.utils import hash_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.dependencies.dependencies import get_current_user
 from app.routes.otp import generate_otp, store_otp, send_otp_email, verify_otp_code
-from google.cloud.firestore_v1 import FieldFilter
+from app.services.dataservice import store_notification
 
 
 router = APIRouter()
@@ -55,6 +55,7 @@ async def register(req: RegisterRequest):
             raise HTTPException(status_code=400, detail="user_role must be 'admin' or 'user'")
 
         collection = db.collection(req.user_role)
+        notification_ref = db.collection('notifications')
         docs = collection.where("email", "==", req.email).limit(1).stream()
         existing_user_doc = next(docs, None)
 
@@ -73,7 +74,8 @@ async def register(req: RegisterRequest):
                     "message": "Unverified account found. OTP has been resent."
                 }
             else:
-                raise HTTPException(status_code=400, detail="Email is already registered and verified.")
+                if req.hospital in user.get('hospital'):
+                    raise HTTPException(status_code=400, detail="Email is already registered and verified.")
 
         # Case 2: Fresh registration
         now = datetime.utcnow().isoformat()
@@ -82,30 +84,22 @@ async def register(req: RegisterRequest):
             "last_name": req.last_name,
             "email": req.email,
             "password": hash_password(req.password),
-            "hospital": req.hospital,
+            "hospital": [req.hospital] if req.user_role == 'user' else req.hospital,
             "contact": req.contact,
-            "verified": False,
+            "verified": False if req.user_role == 'user' else True,
             "created_at": now,
-            "accepted": False
+            "accepted": False if req.user_role == 'user' else True,
         }
-        if req.user_role == 'user':
-            notification_data = {
-                "hospital": req.hospital,
-                "email": req.email,
-                "read": False,
-                "created_at": now,
-                "action": "user_add"
-            }            
-            notificaton_collection = db.collection("notifications")
-            notificaton_collection.add(notification_data)
 
+        store_notification(req.email, req.user_role, 'New User registered', req.hospital)
         collection.add(user_data)
 
-        # Send OTP
         otp = generate_otp()
         store_otp(req.email, otp)
         await send_otp_email(req.email, otp)
-
+        
+        auth_log(req.email, req.user_role, 'register', req.hospital)
+        
         return {
             "status": "success",
             "message": f"{req.user_role.capitalize()} registered. OTP sent to email."
@@ -133,13 +127,18 @@ async def login(req: LoginRequest):
         if user["password"] != hash_password(req.password):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        if user["hospital"] != req.hospital:
+        if req.hospital not in user["hospital"]:
             raise HTTPException(status_code=401, detail="You aren't registered for ${req.hospital}")
+        if user['barred'] if 'barred' in user else False:
+            raise HTTPException(status_code=401, detail="Your account has been barred. Please contact the administrator.")
 
         token_data = {"sub": req.email, "role": req.user_role}
         if 'hospital' in user:
-            token_data['hospital'] = user['hospital']
+            token_data['hospital'] = req.hospital
         access_token = create_access_token(token_data)
+
+        store_notification(req.email, req.user_role, 'User LoggedIn', req.hospital)
+        auth_log(req.email, req.user_role, 'login', req.hospital)
 
         return TokenResponse(
             access_token=access_token,
@@ -150,7 +149,20 @@ async def login(req: LoginRequest):
 
 @router.get("/profile")
 async def get_profile(current_user: dict = Depends(get_current_user)):
-    return {"email": current_user["sub"], "role": current_user["role"], "hospital": current_user['hospital']}
+    try:
+        if current_user["role"] not in ("admin", "user"):
+            raise HTTPException(status_code=400, detail="user_role must be 'admin' or 'user'")
+
+        collection = db.collection(current_user["role"])
+        docs = collection.where("email", "==", current_user["sub"]).limit(1).get()
+        user = docs[0].to_dict()
+        
+        if user['barred'] if 'barred' in user else False:
+            raise HTTPException(status_code=401, detail="Your account has been barred. Please contact the administrator.")
+        
+        return {"email": current_user["sub"], "role": current_user["role"], "hospital": current_user['hospital']}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/verify-otp")
 async def verify_otp(req: OTPVerifyRequest):
@@ -161,6 +173,8 @@ async def verify_otp(req: OTPVerifyRequest):
     if user_doc:
         db.collection("user").document(user_doc.id).update({"verified": True})
 
+    store_notification(req.email, 'user', 'User Verified')
+    
     return {"status": "success", "message": "OTP verified successfully"}
 
 @router.post('/forgot-pass')
@@ -179,6 +193,8 @@ async def forgotPass(req: Request):
         otp = generate_otp()
         store_otp(email, otp)
         await send_otp_email(email, otp)
+        if user_role == 'user':
+            store_notification(email, 'user', 'Password Reset', user.get('hospital')[0] if 'hospital' in user and isinstance(user['hospital'], list) and user['hospital'] else None)
         
         return {
             'status': 'success',
@@ -210,6 +226,9 @@ async def resetPass(req: Request):
             "password": hash_password(body.get("new_pass"))
         })
         
+        auth_log(body.get("email"), body.get("user_role"), 'Password Reset')
+        store_notification(body.get("email"), body.get("user_role"), 'Password Reset')
+        
         return{
             "status": "success",
             "message": "Password reset successfully."
@@ -218,31 +237,17 @@ async def resetPass(req: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/get-profile-unverified")
-async def unverified_profiles(req: UnverifiedUsers):
-    try:
-        collection = db.collection('user')
-        docs = (
-            collection
-            .where("accepted", "==", False)
-            .where("verified", "==", True)
-            .where("hospital", "==", req.hospital)
-            .get()
-        )
-        # print(docs)
-        results = []
-        for d in docs:
-            doc = d.to_dict()
-            if 'barred' in doc:
-                if not doc['barred']:
-                    results.append(doc)
-            else:
-                results.append(doc)
-                
-        return {
-            "users": results,
-            "status": "success"
-        }
-              
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def auth_log(email: Optional[str], role: Optional[str], type: Optional[str], hospital: Optional[str]):
+    authlog_ref = db.collection('authlog')
+    now = datetime.utcnow().isoformat()
+    authlog_obj = {
+        'type': type,
+        'email': email,
+        'role': role,
+        'created_at': now
+    }
+    if hospital:
+        authlog_obj['hospital'] = hospital
+    authlog_ref.add(authlog_obj)
+        
+        

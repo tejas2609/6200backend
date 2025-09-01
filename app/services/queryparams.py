@@ -1,13 +1,7 @@
-from fastapi import Depends, Query
+import redis
 
-def as_query(model: type):
-    def dependency(**kwargs):
-        return model(**kwargs)
+# connect to Redis
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
-    annotations = {
-        field: Query(None)
-        for field in model.__annotations__.keys()
-    }
-
-    dependency.__annotations__ = annotations
-    return Depends(dependency)
+# ⚠️ Danger: this deletes ALL keys in the current DB!
+r.flushdb()

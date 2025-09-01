@@ -4,9 +4,11 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Depen
 from firebase_admin import firestore, storage
 from pydantic import BaseModel
 import uuid
-import shutil
-
+from google.cloud import firestore as gfirestore
+from app.routes.auth import UnverifiedUsers
 from app.services.conversion import mat_file_conversion
+from app.services.websockets import send_progress
+from app.services.dataservice import store_notification
 
 router = APIRouter()
 
@@ -40,18 +42,25 @@ async def UserActionByAdmin(req: userActionByAdminModel):
     except Exception as e:
         raise HTTPException(stcatus_code=500, detail=f"Registration failed: {str(e)}")
 
-
-connections = {}
-
-@router.websocket("/ws/{upload_id}")
-async def websocket_endpoint(websocket: WebSocket, upload_id: str):
-    await websocket.accept()
-    connections[upload_id] = websocket
+@router.post("/barr-user-action")
+async def barr_user(req: Request):
     try:
-        while True:
-            await websocket.receive_text()  # keep alive
-    except WebSocketDisconnect:
-        del connections[upload_id]
+        body = await req.json()
+        collection = db.collection('user')
+        docs = collection.where("email", "==", body['email']).limit(1).stream()
+        existing_user_doc = next(docs, None)
+        
+        if not existing_user_doc:
+            raise HTTPException(status_code=400, detail="User not found")
+
+        db.collection("user").document(existing_user_doc.id).update({"barred": body['barred']})
+
+        return {
+            "status": "success",
+            "message": "User Updated Successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Operation failed: {str(e)}")
 
 @router.post("/upload-patient-file")
 async def upload_file(
@@ -87,7 +96,8 @@ async def upload_file(
                 "filename": filename,
                 "user": user,
                 "hospital": hospital,
-                "timestamp": datetime.utcnow()
+                "timestamp": datetime.utcnow(),
+                "selectedUsers": []
             })
 
             background_tasks.add_task(upload_with_socket_progress, doc_ref, filename, zarr_path, unique_id)
@@ -100,13 +110,84 @@ async def upload_file(
         if os.path.exists(temp_mat_path):
             os.remove(temp_mat_path)
 
-async def send_progress(upload_id: str, progress: float):
-    ws = connections.get(upload_id)
-    if ws:
-        try:
-            await ws.send_json({"progress": progress})
-        except:
-            pass
+@router.post("/get-profile-unverified")
+async def unverified_profiles(req: UnverifiedUsers):
+    try:
+        collection = db.collection('user')
+        docs = (
+            collection
+            .where("accepted", "==", False)
+            .where("verified", "==", True)
+            .where("hospital", "array_contains", req.hospital)
+            .get()
+        )
+        # print(docs)
+        results = []
+        for d in docs:
+            doc = d.to_dict()
+            if 'barred' in doc:
+                if not doc['barred']:
+                    results.append(doc)
+            else:
+                results.append(doc)
+                
+        return {
+            "users": results,
+            "status": "success"
+        }
+              
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/get-verified-users")
+async def unverified_profiles(req: Request):
+    try:
+        body = req.query_params
+        collection = db.collection('user')
+        docs = (
+            collection
+            .where("accepted", "==", True)
+            .where("verified", "==", True)
+            .where("hospital", "array_contains", body['hospital'])
+            .get()
+        )
+        results = []
+        for d in docs:
+            doc = d.to_dict()
+            obj = {
+                'email' : doc['email'],
+                'name' : doc['first_name'] + ' ' + doc['last_name'],
+                'barred' : doc['barred'] if 'barred' in doc else False,
+                'created_at': int(datetime.fromisoformat(doc['created_at']).timestamp())
+            }   
+            results.append(obj) 
+        return {
+            "users": results,
+            "status": "success"
+        }
+              
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post('/update-access')
+async def updateAccessOfFiles(req: Request):
+    try:
+        body = await req.json()
+        access_structure = body.get('access_structure')
+        
+        for struct in access_structure:
+            doc_ref = db.collection('files').document(struct['id'])
+            if doc_ref.get().exists:
+                doc_ref.update({
+                    'selectedUsers': struct['selectedUsers']
+                })
+        return {
+            'status': 'success',
+            'message': 'Access Updated'
+        }    
+                
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def upload_with_socket_progress(doc_ref, filename, local_path, upload_id):
     import asyncio
@@ -115,7 +196,6 @@ def upload_with_socket_progress(doc_ref, filename, local_path, upload_id):
         total_size = 0
         file_list = []
 
-        # Collect all file paths and total size
         for root, _, files in os.walk(local_path):
             for file in files:
                 full_path = os.path.join(root, file)
@@ -127,7 +207,6 @@ def upload_with_socket_progress(doc_ref, filename, local_path, upload_id):
         uploaded = 0
         chunk_size = 1024 * 1024
 
-        # Upload each file
         for full_path, blob_path in file_list:
             blob = bucket.blob(blob_path)
             with open(full_path, "rb") as f:
@@ -144,6 +223,7 @@ def upload_with_socket_progress(doc_ref, filename, local_path, upload_id):
             "status": "success",
             "storage_path": filename
         })
+        store_notification(doc_ref.get().to_dict()['user'], 'user', 'New File uploaded', doc_ref.get().to_dict()['hospital'])
         asyncio.run(send_progress(upload_id, 100))
 
     except Exception as e:
@@ -155,4 +235,3 @@ def upload_with_socket_progress(doc_ref, filename, local_path, upload_id):
         if os.path.isdir(local_path):
             import shutil
             shutil.rmtree(local_path)
-

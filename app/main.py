@@ -11,7 +11,11 @@ import os
 import shutil
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from app.services.livedata import flush_to_firestore, generate_data
+from app.services.alarmservice import start_alarm_evaluator
+from app.services.kafkapublisher import start_producing
+from app.services.livedata import start_storage_writer
+
+# from app.services.livedata import generate_Data1
 
 
 app = FastAPI()
@@ -45,7 +49,7 @@ def scheduled_job():
 @app.on_event("startup")
 def start_live_data():
     x = 0
-    # threading.Thread(target=generate_data, daemon=True).start()
+    # threading.Thread(target=generate_Data1, daemon=True).start()
     # threading.Thread(target=flush_to_firestore, daemon=True).start()
     # while True:
     #     time.sleep(60)
@@ -60,3 +64,10 @@ def start_scheduler():
 def shutdown_scheduler():
     scheduler.shutdown()
     print("APScheduler stopped.")
+    
+@app.on_event('startup')
+def start_kafkas_services():
+    x = 0
+    threading.Thread(target=start_producing, daemon=True).start()
+    threading.Thread(target=start_alarm_evaluator, daemon=True).start()
+    threading.Thread(target=start_storage_writer, daemon=True).start()
