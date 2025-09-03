@@ -1,16 +1,23 @@
 from opcua import Server
 import random
 import time
+import logging
 
 ENDPOINT = "opc.tcp://localhost:4840/freeopcua/server/"
 NAMESPACE_URI = "http://medical.example.com"
-UPDATE_INTERVAL = 0.1  # seconds
+# For faster testing set to 0.02 (50 Hz). Your current pipeline uses 0.1 s.
+UPDATE_INTERVAL = 1  # seconds
 
 VITAL_RANGES = {
-    "HeartRate": (0, 180),
-    "CO2": (30, 150),
-    "BloodPressure": (30, 150),
+    "HeartRate": (50, 150),
+    "CO2": (20, 140),
+    "BloodPressure": (80, 160),
 }
+
+logging.getLogger("opcua").setLevel(logging.WARNING)
+logging.getLogger("opcua.uaprotocol").setLevel(logging.WARNING)
+logging.getLogger("opcua.client.ua_client").setLevel(logging.WARNING)
+
 
 def generate_vital_value(min_val, max_val):
     return round(random.uniform(min_val, max_val), 2)
@@ -29,19 +36,12 @@ def start_opcua_server():
     server = Server()
     server.set_endpoint(ENDPOINT)
     idx = server.register_namespace(NAMESPACE_URI)
-    
+
     objects = server.get_objects_node()
-    
+
     patients_data = {
-        # "Patient1Vitals": create_patient_node(objects, idx, "Patient1Vitals"),
-        # "Patient2Vitals": create_patient_node(objects, idx, "Patient2Vitals"),
-        # "Patient3Vitals": create_patient_node(objects, idx, "Patient3Vitals"),
+        # add more patients as needed
         "Patient4Vitals": create_patient_node(objects, idx, "Patient4Vitals"),
-        # "Patient5Vitals": create_patient_node(objects, idx, "Patient5Vitals"),
-        # "Patient6Vitals": create_patient_node(objects, idx, "Patient6Vitals"),
-        # "Patient7Vitals": create_patient_node(objects, idx, "Patient7Vitals"),
-        # "Patient8Vitals": create_patient_node(objects, idx, "Patient8Vitals"),
-        # "Patient9Vitals": create_patient_node(objects, idx, "Patient9Vitals")
     }
 
     server.start()
@@ -49,7 +49,7 @@ def start_opcua_server():
 
     try:
         while True:
-            for patient_name, vitals in patients_data.items():
+            for _, vitals in patients_data.items():
                 for vital, (vmin, vmax) in VITAL_RANGES.items():
                     vitals[vital].set_value(generate_vital_value(vmin, vmax))
             time.sleep(UPDATE_INTERVAL)

@@ -12,6 +12,7 @@ from app.services.websockets import send_live_update
 db = firestore.client()
 
 KAFKA_BROKER = "localhost:9092"
+# This stays on the batch topic for efficient storage
 KAFKA_TOPIC = "vitals_data"
 
 def start_storage_writer():
@@ -49,7 +50,6 @@ def start_storage_writer():
                     if vital == "timestamp":
                         continue
                     updates.setdefault(vital, []).append({"value": value, "timestamp": timestamp})
-
             for vital, val_array in updates.items():
                 doc_ref.set(
                     {vital: firestore.ArrayUnion(val_array)},
@@ -59,11 +59,11 @@ def start_storage_writer():
         except Exception as e:
             print(f"[ERROR] Failed to store batch: {e}")
 
-
+# ---------- Live watchers for dashboards (unchanged) ----------
 WATCHES = {}
 WATCHES_LOCK = threading.Lock()
-LAST_UPDATE_TIME = {}   
-LAST_EMIT_TS = {}     
+LAST_UPDATE_TIME = {}   # firestore update_time cache per doc
+LAST_EMIT_TS = {}       # debounce per ref_id
 
 def _should_emit(doc: DocumentSnapshot, ref_id: str, debounce_s: float = 0.20) -> bool:
     path = doc.reference.path
@@ -83,7 +83,6 @@ def _should_emit(doc: DocumentSnapshot, ref_id: str, debounce_s: float = 0.20) -
 def get_watch_key(hospital_name: str, patient_name: str, heat_map: bool) -> str:
     return f"{hospital_name}:{patient_name}:{1 if heat_map else 0}"
 
-# ---- callbacks ----
 def on_snapshot(doc_snapshot, changes, read_time, x_axis, y_axis):
     for doc in doc_snapshot:
         if not doc.exists:
@@ -120,7 +119,7 @@ def onsnapshot_heatmap(doc_snapshot, changes, read_time, x_axis, patientName):
 
         if latest:
             x_cols = list(latest.keys())
-            y_cols = list(latest)  
+            y_cols = list(latest)  # mirror just to satisfy your websocket payload
             asyncio.run(send_live_update(ref_id, {
                 "output_data": {"x_columns": x_cols, "y_columns": y_cols},
                 "status": "success"
@@ -145,4 +144,5 @@ def get_live_data(xaxis, yaxis, hospital_name, patientName, heatMap):
             watch = col_ref.on_snapshot(callback)
             WATCHES[key] = watch
     except Exception as e:
+        from fastapi import HTTPException
         raise HTTPException(status_code=500, detail=f"Error retrieving live data: {str(e)}")
