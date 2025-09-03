@@ -31,7 +31,6 @@ conf = ConnectionConfig(
     USE_CREDENTIALS=True
 )
 
-# Queue for alerts to be emailed
 alert_queue = queue.Queue()
 
 async def send_email_alert(alert):
@@ -60,18 +59,16 @@ Current Value of {vital} = {value}
         logging.info(f"Email sent to {email} for patient {patientName}, vital {vital}")
     except Exception as e:
         logging.error(f"Failed to send email to {email}: {e}")
-        # Save failed email to Firestore for retry/logging
         db.collection('failed_alert_emails').add(alert)
 
 
 def email_worker():
-    """Runs in a background thread, processes alert_queue with asyncio loop."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     while True:
         alert = alert_queue.get()
         if alert is None:
-            break  # Allows clean shutdown if needed
+            break  
         loop.run_until_complete(send_email_alert(alert))
         alert_queue.task_done()
 
@@ -121,12 +118,11 @@ def evaluate_alarms(batch, alarms):
                         "conditionname": conditionName
                     }
                     triggered.append(alert)
-                    alert_queue.put(alert)  # enqueue alert for email sending
+                    alert_queue.put(alert) 
     return triggered
 
 
 def start_alarm_evaluator():
-    # Start email worker thread
     threading.Thread(target=email_worker, daemon=True).start()
     logging.info("Email worker thread started.")
 

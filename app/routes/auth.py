@@ -59,12 +59,10 @@ async def register(req: RegisterRequest):
         docs = collection.where("email", "==", req.email).limit(1).stream()
         existing_user_doc = next(docs, None)
 
-        # Case 1: If user already exists
         if existing_user_doc:
             user = existing_user_doc.to_dict()
 
             if not user.get("verified", False):
-                # ✅ Resend OTP instead of error
                 otp = generate_otp()
                 store_otp(req.email, otp)
                 await send_otp_email(req.email, otp)
@@ -77,7 +75,6 @@ async def register(req: RegisterRequest):
                 if req.hospital in user.get('hospital'):
                     raise HTTPException(status_code=400, detail="Email is already registered and verified.")
 
-        # Case 2: Fresh registration
         now = datetime.utcnow().isoformat()
         user_data = {
             "first_name": req.first_name,

@@ -27,9 +27,6 @@ fs = gcsfs.GCSFileSystem(project="project-8680797989633263399", token=key_path)
 OFFSET = 0.0005
 
 def get_file_details(doc_id: str) -> str:
-    """
-    Returns the 'storage_path' field from 'files/{doc_id}' or empty string if not found.
-    """
     try:
         doc_ref = db.collection("files").document(doc_id)
         doc = doc_ref.get()
@@ -45,10 +42,6 @@ def _zarr_path(filename: str) -> str:
     return f"{BASE_PATH}{filename}/SData"
 
 def _open_zarr_group(filename: str):
-    """
-    Prefer consolidated metadata for fewer object-store reads.
-    Falls back to regular open if consolidation not present.
-    """
     mapper = fs.get_mapper(_zarr_path(filename))
     try:
         return zarr.open_consolidated(mapper, mode="r")
@@ -56,30 +49,26 @@ def _open_zarr_group(filename: str):
         return zarr.open_group(store=mapper, mode="r")
 
 def _compute_time_slice(time_data: np.ndarray, duration) -> slice:
-    """
-    Compute a trailing time window slice given a desired duration in seconds.
-    """
     time_data = time_data[np.isfinite(time_data)]
     if time_data.size == 0:
         return slice(0, 0)
     full_span = float(time_data[-1] - time_data[0])
+    if time_data[0] > 10000000000:
+        duration = int(duration) * 1000
     if duration and duration != "undefined":
         span = min(full_span, float(duration))
     else:
         span = full_span
-    start_time = time_data[-1] - span
+    start_time = time_data[-1] - span 
     start_idx = int(np.searchsorted(time_data, start_time, side="left"))
+    print(start_idx)
     return slice(start_idx, None)
 
 def _estimate_fs(time_window: np.ndarray) -> float:
-    """
-    Estimate sampling frequency from median dt of the time axis.
-    """
     t = np.asarray(time_window, dtype=float)
     t = t[np.isfinite(t)]
     if t.size < 2:
         return 1.0
-    # Remove duplicates and ensure monotonicity
     t = np.unique(t)
     diffs = np.diff(t)
     diffs = diffs[diffs > 0]
@@ -89,30 +78,20 @@ def _estimate_fs(time_window: np.ndarray) -> float:
     return 1.0 / med_dt if med_dt > 0 else 1.0
 
 def _normalize_cutoffs(lowcut: float, highcut: float, fs: float, margin: float = 1e-3):
-    """
-    Returns (wn_low, wn_high) in (0, 1) with wn_low < wn_high.
-    If requested band is not feasible given fs, shrink gracefully.
-    """
     nyq = 0.5 * fs
     if nyq <= 0:
         raise ValueError("Non-positive Nyquist frequency. Check your time axis.")
-
-    # Order and clamp in Hz first
+    
     lo_hz, hi_hz = sorted((abs(lowcut), abs(highcut)))
-    # Keep hi below Nyquist by a margin
     hi_hz = min(hi_hz, nyq * (1.0 - margin))
-    # Keep lo above 0
     lo_hz = max(lo_hz, 1e-6)
 
-    # If still invalid (e.g., very low fs), compress band
     if lo_hz >= hi_hz:
-        # fallback: make it a narrow band below hi_hz
         lo_hz = max(1e-6, hi_hz * 0.5)
 
     wn_low = lo_hz / nyq
     wn_high = hi_hz / nyq
 
-    # Final guard
     wn_low = max(min(wn_low, 1.0 - 2e-6), 1e-6)
     wn_high = max(min(wn_high, 1.0 - 1e-6), wn_low + 1e-6)
 
@@ -135,16 +114,11 @@ def _butter_lowpass(cutoff, fs, order=2):
 def _safe_filtfilt(b, a, x, axis=0):
     n = x.shape[0]
     padlen = 3 * (max(len(a), len(b)) - 1)
-    if n <= max(15, padlen):  # conservative guard
-        # Not enough samples for filtfilt; skip filtering
+    if n <= max(15, padlen):
         return x
     return filtfilt(b, a, x, axis=axis)
 
 def _apply_filter(kind: str, data: np.ndarray, time_window: np.ndarray) -> np.ndarray:
-    """
-    kind: 'savgol' | 'bandpass' | 'butterworth' | '' (no-op)
-    data can be 1D (T,) or 2D (T, C). Filtering happens across axis=0.
-    """
     if data.size == 0 or kind == "":
         return data
 
@@ -152,7 +126,7 @@ def _apply_filter(kind: str, data: np.ndarray, time_window: np.ndarray) -> np.nd
         n = data.shape[0]
         wl = min(201, n if n % 2 == 1 else n - 1)
         if wl < 7:
-            wl = 7 if n >= 7 else (n | 1)  # smallest odd not greater than n
+            wl = 7 if n >= 7 else (n | 1)
         po = 5 if wl > 5 else max(2, wl - 1)
         return savgol_filter(data, window_length=wl, polyorder=po, axis=0, mode="interp")
 
@@ -169,27 +143,17 @@ def _apply_filter(kind: str, data: np.ndarray, time_window: np.ndarray) -> np.nd
     return data
 
 def get_time1(filename, duration, _unused_filter: str = ""):
-    """
-    Returns time window as a Python list[float].
-    """
     root = _open_zarr_group(filename)
     time_data = root["Time"][:]
     s = _compute_time_slice(time_data, duration)
     return time_data[s].astype(float).tolist()
 
 def extract_columns1(filename, colname: str, duration, filt: str = "", applyFilter: bool = True):
-    """
-    Returns data series for the requested dataset.
-    For 'RawVelocity' returns list-of-lists for the first 30 channels after
-    converting to displacement and applying filter.
-    For other datasets returns a single list of floats.
-    """
     if not filename:
         return []
 
     root = _open_zarr_group(filename)
 
-    # Shared time window
     time_arr = root["Time"][:]
     s = _compute_time_slice(time_arr, duration)
     time_window = time_arr[s].astype(float)
@@ -220,9 +184,6 @@ def get_patients_general_data(filename):
     return {"metadata": dict(root.attrs), "vitals": list(root.keys())}
 
 def on_snapshot(col_snapshot, changes, read_time, x_axis, y_axis):
-    """
-    Firestore listener callback. Emits only the last 10 points for brevity.
-    """
     output = {"x_columns": [], "y_columns": []}
     for doc in col_snapshot:
         data = doc.to_dict()
@@ -238,9 +199,6 @@ def on_snapshot(col_snapshot, changes, read_time, x_axis, y_axis):
         asyncio.run(send_live_update(upload_id, {"output_data": output, "status": "success"}))
 
 def onsnapshot_heatmap(col_snapshot, changes, read_time, x_axis, patientName):
-    """
-    Firestore listener callback. Emits only the last point for brevity.
-    """
     output = {"x_columns": [], "y_columns": []}
     obj = {}
     time_obj = []
@@ -259,10 +217,6 @@ def get_watch_key(hospital_name: str, patient_name: str, heat_map: bool) -> str:
     return f"{hospital_name}:{patient_name}:{int(bool(heat_map))}"
 
 def get_live_data(xaxis, yaxis, hospital_name, patientName, heatMap):
-    """
-    Attach a Firestore listener to:
-      live_data/{hospital_name}/patients/*
-    """
     try:
         key = get_watch_key(hospital_name, patientName, heatMap)
         col_ref = db.collection("live_data").document(hospital_name).collection("patients").document(patientName)

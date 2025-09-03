@@ -31,10 +31,8 @@ app.add_middleware(
 
 app.include_router(router.router)
 
-# Create the scheduler
 scheduler = BackgroundScheduler()
 
-# Define your scheduled job (e.g., delete a folder or log hello)
 def scheduled_job():
     folder_path = os.getenv('DOWNLOAD_FOLDER',"D:/UoS/COMP6200/firebase/app/tmp")
     if os.path.exists(folder_path):

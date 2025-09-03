@@ -146,7 +146,6 @@ def upload_with_socket_progress1(doc_ref, filename, local_path, upload_id):
     try:
         total_size = 0
         file_list = []
-        # Collect all file paths and total size
         for root, _, files in os.walk(local_path):
             for file in files:
                 full_path = os.path.join(root, file)
@@ -157,7 +156,6 @@ def upload_with_socket_progress1(doc_ref, filename, local_path, upload_id):
         uploaded = 0
         chunk_size = 1024 * 1024
 
-        # Upload each file
         for full_path, blob_path in file_list:
             blob = bucket.blob(blob_path)
             with open(full_path, "rb") as f:
@@ -182,37 +180,80 @@ def upload_with_socket_progress1(doc_ref, filename, local_path, upload_id):
 
     finally:
         print(';Done')
-        # Remove local folder after upload
         if os.path.isdir(local_path):
             import shutil
             shutil.rmtree(local_path)
 
 def convert_zarr_to_mat(root, filename, file_id):
+    def to_numeric_array(x):
+        if isinstance(x, (list, tuple)):
+            return np.asarray(x, dtype=np.float64)
+        if isinstance(x, np.ndarray):
+            return x if x.dtype != object else np.asarray(x, dtype=np.float64)
+        if isinstance(x, (int, float, np.number)):
+            return np.asarray([x], dtype=np.float64)
+        return x 
+
     data_dict = {}
-    interval_doc_ref = db.collection('intervals').where("patientFile", "==", file_id)
+
     for key in root.array_keys():
-        data_dict[key] = root[key][:]
-    
+        arr = root[key][:]
+        data_dict[key] = to_numeric_array(arr)
+
     for key, val in root.attrs.items():
-        data_dict[key] = val
+        if isinstance(val, (int, float, np.number, str, bytes)):
+            data_dict[key] = val
+        elif isinstance(val, (list, tuple, np.ndarray)):
+            arr = np.asarray(val)
+            if arr.dtype != object:
+                data_dict[key] = to_numeric_array(arr)
+
     intervals = []
     if 'intervals' in data_dict:
-        intervals = data_dict['intervals']
-    for interval_doc in interval_doc_ref.stream():
-        doc = interval_doc.to_dict()
-        intervals.append({'intervals': doc['intervals'], 'vital': doc['yaxis']})
-    data_dict["intervals"] = intervals
-    output_data = {'SData': data_dict}
+        existing = data_dict['intervals']
+        if isinstance(existing, list):
+            for it in existing:
+                if isinstance(it, dict):
+                    intervals.append({
+                        'intervals': to_numeric_array(it.get('intervals', [])),
+                        'vital': it.get('vital', '')
+                    })
+        elif isinstance(existing, (np.ndarray, list, tuple)):
+            intervals.append({
+                'intervals': to_numeric_array(existing),
+                'vital': ''
+            })
 
-    output_path = os.path.join(os.getenv('DOWNLOAD_FOLDER', "D:/UoS/COMP6200/firebase/app/tmp"), filename + '.mat')
+    interval_doc_ref = db.collection('intervals').where("patientFile", "==", file_id)
+    for interval_doc in interval_doc_ref.stream():
+        doc = interval_doc.to_dict() or {}
+        intervals.append({
+            'intervals': to_numeric_array(doc.get('intervals', [])),
+            'vital': doc.get('yaxis', '')
+        })
+
+    if intervals:
+        data_dict['intervals'] = intervals
+    else:
+        data_dict.pop('intervals', None)
+    output_data = {'SData': data_dict}
+    output_path = os.path.join(
+        os.getenv('DOWNLOAD_FOLDER', "D:/UoS/COMP6200/firebase/app/tmp"),
+        filename + '.mat'
+    )
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    savemat(output_path, output_data)
+    savemat(
+        output_path,
+        output_data,
+        oned_as='row',
+        long_field_names=True,
+        do_compression=True
+    )
     return output_path
 
 def zip_dir_to_temp(dir_path: str) -> str:
-    """Zip a directory to a temp .zip and return the temp file path."""
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
-    tmp.close()  # we'll write with ZipFile
+    tmp.close() 
     with zipfile.ZipFile(tmp.name, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for root, _, files in os.walk(dir_path):
             for f in files:

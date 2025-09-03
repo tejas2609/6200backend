@@ -40,7 +40,6 @@ async def get_data(request: Request):
         filt = params.get("filter", "")
 
         loop = asyncio.get_running_loop()
-        # Run CPU-bound I/O+numpy work in a thread pool
         y_columns, x_columns = await asyncio.gather(
             loop.run_in_executor(None, partial(dataservice.extract_columns1, filename, yaxis, duration, filt, True)),
             loop.run_in_executor(None, partial(dataservice.get_time1, filename, duration, filt)),
@@ -133,8 +132,8 @@ def get_files(request: Request,
     try:
         get_params = dict(request.query_params)
         hospital_name = get_params.get('hospital')
-        files_ref = db.collection('files').order_by("timestamp", direction=firestore.Query.DESCENDING)
-        docs = files_ref.get()
+        files_ref = db.collection('files').where("hospital", "==", hospital_name)
+        docs = files_ref.stream()
         file_list = []
         for doc in docs:
             data = doc.to_dict()
@@ -144,8 +143,6 @@ def get_files(request: Request,
                 if data.get('selectedUsers'):
                     if current_user['sub'] not in data.get('selectedUsers'):
                         continue
-            if not hospital_name and data.get("hospital") != hospital_name:
-                continue
             file_name = data.get("storage_path")
             if not file_name:
                 continue

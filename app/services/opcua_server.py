@@ -2,7 +2,6 @@ from opcua import Server
 import random
 import time
 
-# Configuration
 ENDPOINT = "opc.tcp://localhost:4840/freeopcua/server/"
 NAMESPACE_URI = "http://medical.example.com"
 UPDATE_INTERVAL = 0.1  # seconds
@@ -33,7 +32,6 @@ def start_opcua_server():
     
     objects = server.get_objects_node()
     
-    # Create multiple patient nodes
     patients_data = {
         # "Patient1Vitals": create_patient_node(objects, idx, "Patient1Vitals"),
         # "Patient2Vitals": create_patient_node(objects, idx, "Patient2Vitals"),

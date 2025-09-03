@@ -30,16 +30,12 @@ async def get_all_notifications(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         return HTTPException(status_code=500, detail=str(e))
 
-@router.post('/read-notifications')
-async def read_notifications(req: Request):
+@router.get('/read-notifications')
+async def read_notifications(current_user: dict = Depends(get_current_user)):
     try:
-        body = await req.body
-        notification_ids = body.get('notifications')
-        notification_ref = db.collection('notifications')
-        
-        for id in notification_ids:
-            doc_ref = notification_ref.document(id)
-            doc_ref.update({"read": True})
+        notification_ref = db.collection('notifications').where('read', '==', False).where('email', '==', current_user['sub']).stream()
+        for doc_snapshot in notification_ref:
+            doc_snapshot.reference.update({"read": True})
     
         return 
     except Exception as e:

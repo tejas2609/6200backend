@@ -11,8 +11,8 @@ OPC_UA_ENDPOINT = "opc.tcp://localhost:4840/freeopcua/server/"
 KAFKA_BROKER = "localhost:9092"
 KAFKA_TOPIC = "vitals_data"
 HOSPITAL = "General Hospital"
-INTERVAL = 1  # seconds
-BATCH_SIZE = int(5 / INTERVAL)  # number of samples before sending
+INTERVAL = 0.1 
+BATCH_SIZE = int(5 / INTERVAL) 
 
 def get_all_patients(client):
     root = client.get_objects_node()
@@ -49,8 +49,8 @@ def patient_worker(patient_name, vitals, producer):
             time.sleep(INTERVAL)
 
         except Exception as e:
-            # convert_to_zarr_live_data(patient_name)
-            time.sleep(5)  # Backoff on error
+            convert_to_zarr_live_data(patient_name)
+            time.sleep(5) 
 
 def start_producing():
     try:
@@ -73,7 +73,7 @@ def start_producing():
 
         try:
             while True:
-                time.sleep(1)  # Keep main thread alive
+                time.sleep(1)
         except KeyboardInterrupt:
             print("Stopping...")
         finally:
