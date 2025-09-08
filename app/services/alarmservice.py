@@ -23,7 +23,7 @@ ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "triggered_alerts")  # outputs
 
 db = firestore.client()
 REDIS_URL = os.getenv("REDIS_URL", "localhost")
-r = redis.Redis(host=REDIS_URL, port=6379, decode_responses=True)
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 # ---------- Email queue ----------
 alert_queue = queue.Queue()
@@ -40,6 +40,9 @@ conf = ConnectionConfig(
 
 async def send_email_alert(alert):
     try:
+        ts = int(alert['timestamp']) / 1000  # convert ms → seconds
+        readable_time = datetime.fromtimestamp(ts).strftime('%d-%m-%Y %H:%M:%S')
+
         message = MessageSchema(
             subject=f"Alert: Condition met for {alert['patient']}",
             recipients=[alert["email"]],
@@ -47,7 +50,7 @@ async def send_email_alert(alert):
                 f"Condition Met for {alert['patient']}!\n\n"
                 f"Alarm '{alert['alarmname']}' / Condition '{alert['conditionname']}'\n"
                 f"{alert['vital']} = {alert['value']} (rule: {alert['condition']} {alert['threshold']})\n"
-                f"Timestamp: {alert['timestamp']}"
+                f"Time Logged: {readable_time}"
             ),
             subtype="plain"
         )

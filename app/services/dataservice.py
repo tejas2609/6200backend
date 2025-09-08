@@ -24,7 +24,7 @@ key_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../firebase-
 
 fs = gcsfs.GCSFileSystem(project="project-8680797989633263399", token=key_path)
 
-OFFSET = 0.0005
+OFFSET = 0.0003
 
 def get_file_details(doc_id: str) -> str:
     try:

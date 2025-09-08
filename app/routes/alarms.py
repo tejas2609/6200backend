@@ -11,7 +11,7 @@ router = APIRouter()
 db = firestore.client()
 bucket = storage.bucket()
 REDIS_URL = os.getenv('REDIS_URL', 'localhost')
-r = redis.Redis(host=REDIS_URL, port=6379, decode_responses=True)
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 
 @router.post('/save-alarm')

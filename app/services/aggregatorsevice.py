@@ -10,7 +10,7 @@ db = firestore.client()
 bucket = storage.bucket()
 
 REDIS_URL = os.getenv('REDIS_URL')
-r = redis.Redis(host=REDIS_URL, port=6379, decode_responses=True)
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
 def redis_keys(hospital: str, patient: str, email: str, vital: str, aggregator: str):
     base = f"{hospital}:{patient}:{email}:{vital}:{aggregator}"

@@ -1,13 +1,14 @@
 import threading
-import time
+from dotenv import load_dotenv
+import os
+import datetime
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
+
 from app import firebase  # triggers Firebase initialization
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app import router
-from dotenv import load_dotenv
-from apscheduler.schedulers.blocking import BlockingScheduler
-from datetime import datetime
-import os
 import shutil
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -17,19 +18,28 @@ from app.services.livedata import start_storage_writer
 
 # from app.services.livedata import generate_Data1
 
+DOWNLOAD_FOLDER = os.getenv("DOWNLOAD_FOLDER", "./firebase/app/tmp")
 
 app = FastAPI()
+app.include_router(router.router)
 
-load_dotenv() 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200"],
+    allow_origins=["http://localhost:4200",
+        "http://127.0.0.1:4200",
+        "file://"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(router.router)
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "time": "Z",
+        "download_folder": DOWNLOAD_FOLDER,
+    }
 
 scheduler = BackgroundScheduler()
 
@@ -44,13 +54,6 @@ def scheduled_job():
     else:
         print(f"Folder does not exist: {folder_path}")
 
-@app.on_event("startup")
-def start_live_data():
-    x = 0
-    # threading.Thread(target=generate_Data1, daemon=True).start()
-    # threading.Thread(target=flush_to_firestore, daemon=True).start()
-    # while True:
-    #     time.sleep(60)
 
 @app.on_event("startup")
 def start_scheduler():
