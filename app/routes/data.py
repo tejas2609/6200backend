@@ -139,10 +139,7 @@ def get_files(request: Request,
             data = doc.to_dict()
             if data['status'] != 'success':
                 continue
-            if current_user['role'] == 'user':
-                if data.get('selectedUsers'):
-                    if current_user['sub'] not in data.get('selectedUsers'):
-                        continue
+            
             file_name = data.get("storage_path")
             if not file_name:
                 continue

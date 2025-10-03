@@ -5,6 +5,7 @@ from firebase_admin import firestore, storage
 from pydantic import BaseModel
 import uuid
 from google.cloud import firestore as gfirestore
+from app.dependencies.dependencies import get_current_user
 from app.routes.auth import UnverifiedUsers
 from app.services.conversion import mat_file_conversion
 from app.services.websockets import send_progress
@@ -188,6 +189,83 @@ async def updateAccessOfFiles(req: Request):
                 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get('/get-file-requests')
+async def getRequestAccess(current_user: dict = Depends(get_current_user)):
+    try:
+        doc_ref = db.collection('file-requests').where('hospital', '==', current_user['hospital']).get()
+        files = []
+        
+        for doc in doc_ref:
+            doc_dict = doc.to_dict()
+            files.append(doc_dict)
+        
+        return {
+            'status' : 'success',
+            'files' : files
+        }
+        
+    except Exception as e:
+        return HTTPException(status_code=500, detail="Error fetching requests")
+
+@router.post('/request-access')
+async def requestAccess(req: Request, current_user: dict = Depends(get_current_user)):
+    try:
+        body = await req.json()
+        user_email = body.get('email')
+        patientFileName = body.get('patientFileName')
+        patientFileId = body.get('patientFileId')
+        hospital = body.get('hospital')
+        
+        doc_ref = db.collection('file-requests').document()
+        doc_obj = {
+            'email': user_email,
+            'patientFileName': patientFileName,
+            'patientFileId': patientFileId,
+            'hospital': hospital,
+            'granted': False
+        }
+        doc_ref.set(doc_obj)
+        
+        return {
+            'status' : 'success',
+            'message': 'Access Requested'
+        }
+
+    except Exception as e:
+        return HTTPException(status_code=500, detail='Error granting access')
+    
+@router.post('/grant-access')
+async def grantAccess(req: Request, current_user: dict = Depends(get_current_user)):
+    try:
+        body = await req.json()
+        user_email = body.get('email')
+        patientFile = body.get('patientFile')
+        
+        doc_ref = db.collection('files').document(patientFile)
+        if doc_ref.get():
+            doc_ref.update({
+                "selectedUsers": firestore.ArrayUnion([user_email])
+            })
+        
+        docs = db.collection('file-requests').where('email', '==', user_email) .where('patientFileId', '==', patientFile).limit(1).get()
+
+        if docs: 
+            for doc in docs:
+                doc_ref = doc.reference
+                doc_ref.update({
+                    'granted': True
+                })
+        else:
+            return HTTPException(status_code=404, detail='File Not Found')
+    
+        return {
+            'status' : 'success',
+            'message': 'Access Granted'
+        }
+        
+    except Exception as e:
+        return HTTPException(status_code=500, detail='Error granting access' + str(e))
 
 def upload_with_socket_progress(doc_ref, filename, local_path, upload_id):
     import asyncio

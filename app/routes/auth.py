@@ -72,6 +72,8 @@ async def register(req: RegisterRequest):
                     "message": "Unverified account found. OTP has been resent."
                 }
             else:
+                if req.user_role == 'admin':
+                    raise HTTPException(status_code=400, detail="This email cannot be used, please register using a different one.")
                 if req.hospital in user.get('hospital'):
                     raise HTTPException(status_code=400, detail="Email is already registered and verified.")
 
@@ -113,6 +115,10 @@ async def login(req: LoginRequest):
 
         collection = db.collection(req.user_role)
         docs = collection.where("email", "==", req.email).limit(1).get()
+        
+        if not docs:
+            return HTTPException(status_code=404, detail='User does not exists')
+        
         user = docs[0].to_dict()
         
         if not user:
